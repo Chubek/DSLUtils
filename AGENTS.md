@@ -1,10 +1,6 @@
-This is not the main AGENTS.md file. The main AGENTS.md file is: `.agents/AGENTS.md`
-
-* Guide to `.agents` directory
-- `AGENTS.md` -> what this file is supposed to be
-- `sandbox` -> Tools to turn the agentic run into a sandbox
-- `skills/` -> Skills for the agent
-- `docs` -> Documentation for third-party libraries and tooling
-- `utils/bin` -> The executable utilities for the agents to run in sessions
-- `utils/www` -> The scripts that helps agents pull data out of the web
-- `utils/lib` -> The libraries for agentic work
+To use this application (deepreinforce-ai/Ornith-1.0-9B: Chat with an AI coding assistant that explains its reasoning):
+API schema: GET https://deepreinforce-ai-ornith-1-0-9b.hf.space/gradio_api/info
+Call endpoint: POST https://deepreinforce-ai-ornith-1-0-9b.hf.space/gradio_api/call/v2/{endpoint} {"param_name": value, ...}
+Poll result: GET https://deepreinforce-ai-ornith-1-0-9b.hf.space/gradio_api/call/{endpoint}/{event_id}
+File inputs: POST https://deepreinforce-ai-ornith-1-0-9b.hf.space/gradio_api/upload -F "files=@file.ext", use as: {"path": "<returned-path>", "meta": {"_type": "gradio.FileData"}, "orig_name": "file.ext"}
+Auth: Bearer $HF_TOKEN (https://huggingface.co/settings/tokens)
