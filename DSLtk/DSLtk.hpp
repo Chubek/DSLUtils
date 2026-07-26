@@ -2552,6 +2552,960 @@ production (Fn &&fn)
 }
 
 // ============================================================
+//  PEG: definitions, rules, channels, matching, combinators
+// ============================================================
+//
+// This section is a purely additive extension: it layers a PEG
+// (Parsing Expression Grammar) subsystem on top of the existing
+// pattern-matching (`dsl::pattern`) and parser-combinator
+// (`dsl::Parser` / `ParsecInput`) machinery above. No existing type,
+// function, or layout is modified.
+
+struct PEGDefinition;
+struct PEGRule;
+struct PEGMatch;
+struct PEGParseResult;
+struct PEGMatcher;
+
+/**
+ * @brief A named logical stream that PEG matches are routed into.
+ *
+ * Channels suppress or categorize matches without changing the grammar:
+ * the built-in @IGNORE channel is used for whitespace/comments, while
+ * user-defined channels (created with dsl::new_peg_channel) group matches
+ * by category and enable filtering in the PEG matcher.
+ */
+struct PEGChannel
+{
+  std::string name{ "@DEFAULT" };
+
+  constexpr bool
+  operator== (const PEGChannel &) const
+      = default;
+
+  /// @return true if this is the built-in @IGNORE channel.
+  bool
+  is_ignore () const noexcept
+  {
+    return name == "@IGNORE";
+  }
+};
+
+/// Built-in channel for ignorable input (whitespace, comments, ...).
+inline const PEGChannel PEGIgnoreChannel{ "@IGNORE" };
+
+/// Built-in channel for ordinary (semantic) input.
+inline const PEGChannel PEGDefaultChannel{ "@DEFAULT" };
+
+/**
+ * @brief Creates a custom PEG channel.
+ *
+ * Custom channel names must begin with '@'.
+ *
+ * @param name Channel name, e.g. "@COMMENTS".
+ * @throws std::invalid_argument if the name is empty or lacks the '@'
+ * prefix.
+ */
+inline PEGChannel
+new_peg_channel (std::string_view name)
+{
+  if (name.empty () || name.front () != '@')
+    throw std::invalid_argument (
+        "dsl::new_peg_channel: channel names must begin with '@'");
+  return PEGChannel{ std::string (name) };
+}
+
+/**
+ * @brief Match record handed to PEG semantic actions.
+ *
+ * `value` is a view into the parsed source text and is only valid for the
+ * duration of the parse that produced it.
+ */
+struct PEGMatch
+{
+  std::string_view value{};   ///< matched text
+  std::size_t begin{ 0 };     ///< start offset in source
+  std::size_t end{ 0 };       ///< one-past-end offset in source
+  PEGRule *rule{ nullptr };   ///< rule that produced this match
+  PEGChannel channel{};       ///< resolved channel of the rule
+  void *user_data{ nullptr }; ///< optional extension point
+
+  std::size_t line{ 1 };      ///< 1-based line of `begin`
+  std::size_t column{ 1 };    ///< 1-based column of `begin`
+  bool ignored{ false };      ///< true if routed to @IGNORE
+
+  /// @return length of the matched text (end - begin).
+  std::size_t
+  length () const noexcept
+  {
+    return end - begin;
+  }
+};
+
+/// Signature of a PEG semantic action.
+using PEGSemanticAction = std::function<void (PEGMatch &)>;
+
+namespace peg_detail
+{
+
+/// Runtime-compiled matcher for the dsl::pattern regex subset:
+/// literals, '.', [class] (with ranges and ^ negation), and */+/?/?!
+/// quantifiers. Matching is an unanchored greedy prefix match.
+struct CompiledPattern
+{
+  struct Atom
+  {
+    bool any{ false };        ///< '.' wildcard
+    bool is_class{ false };   ///< [...]
+    bool negate{ false };     ///< [^...]
+    char ch{ 0 };             ///< literal character
+    std::string cls{};        ///< class body, e.g. "a-z0-9"
+    char quant{ 0 };          ///< 0, '*', '+', '?', '!'
+  };
+
+  std::vector<Atom> atoms{};
+  bool valid{ true };
+  std::string error{};
+
+  static bool
+  class_test (std::string_view cls, bool negate, char c)
+  {
+    bool hit = false;
+    for (std::size_t i = 0; i < cls.size ();)
+      {
+        if (i + 2 < cls.size () && cls[i + 1] == '-')
+          {
+            if (c >= cls[i] && c <= cls[i + 2])
+              hit = true;
+            i += 3;
+          }
+        else
+          {
+            if (cls[i] == c)
+              hit = true;
+            ++i;
+          }
+      }
+    return negate ? !hit : hit;
+  }
+
+  static bool
+  atom_test (const Atom &a, char c)
+  {
+    if (a.any)
+      return true;
+    if (a.is_class)
+      return class_test (a.cls, a.negate, c);
+    return a.ch == c;
+  }
+
+  static CompiledPattern
+  compile (std::string_view pat)
+  {
+    CompiledPattern out;
+    std::size_t i = 0;
+    while (i < pat.size ())
+      {
+        // '^'/'$' anchors are accepted and ignored: PEG matching is
+        // implicitly anchored at the current position.
+        if (pat[i] == '^' || pat[i] == '$')
+          {
+            ++i;
+            continue;
+          }
+        Atom a;
+        if (pat[i] == '.')
+          {
+            a.any = true;
+            ++i;
+          }
+        else if (pat[i] == '[')
+          {
+            auto close = pat.find (']', i + 1);
+            if (close == std::string_view::npos)
+              {
+                out.valid = false;
+                out.error = "unterminated character class";
+                return out;
+              }
+            a.is_class = true;
+            std::string body{ pat.substr (i + 1, close - i - 1) };
+            if (!body.empty () && body.front () == '^')
+              {
+                a.negate = true;
+                body.erase (body.begin ());
+              }
+            a.cls = std::move (body);
+            i = close + 1;
+          }
+        else
+          {
+            a.ch = pat[i];
+            ++i;
+          }
+        if (i < pat.size ()
+            && (pat[i] == '*' || pat[i] == '+' || pat[i] == '?'
+                || pat[i] == '!'))
+          a.quant = pat[i++];
+        out.atoms.push_back (std::move (a));
+      }
+    return out;
+  }
+
+  /// Greedy prefix match starting at `start`; returns match end offset.
+  std::optional<std::size_t>
+  match_at (std::string_view text, std::size_t start) const
+  {
+    if (!valid)
+      return std::nullopt;
+    std::size_t pos = start;
+    for (const auto &a : atoms)
+      {
+        auto avail = [&] { return pos < text.size (); };
+        switch (a.quant)
+          {
+          case '*':
+            while (avail () && atom_test (a, text[pos]))
+              ++pos;
+            break;
+          case '+': {
+            std::size_t n = 0;
+            while (avail () && atom_test (a, text[pos]))
+              {
+                ++pos;
+                ++n;
+              }
+            if (n == 0)
+              return std::nullopt;
+            break;
+          }
+          case '?':
+            if (avail () && atom_test (a, text[pos]))
+              ++pos;
+            break;
+          case '!':
+            // Must-fail atom: zero-width negative lookahead.
+            if (avail () && atom_test (a, text[pos]))
+              return std::nullopt;
+            break;
+          default:
+            if (!avail () || !atom_test (a, text[pos]))
+              return std::nullopt;
+            ++pos;
+            break;
+          }
+      }
+    return pos;
+  }
+};
+
+inline void
+line_col_at (std::string_view text, std::size_t pos, std::size_t &line,
+             std::size_t &col)
+{
+  line = 1;
+  col = 1;
+  for (std::size_t i = 0; i < pos && i < text.size (); ++i)
+    {
+      if (text[i] == '\n')
+        {
+          ++line;
+          col = 1;
+        }
+      else
+        ++col;
+    }
+}
+
+/// A lightweight match-arm consumed by PEGMatcher::operator<<.
+struct PEGArm
+{
+  PEGRule *rule{ nullptr };      ///< nullptr => wildcard
+  PEGSemanticAction action{};
+  bool is_wildcard{ false };
+  bool is_channel{ false };      ///< match any rule on `channel`
+  PEGChannel channel{};
+};
+
+} // namespace peg_detail
+
+/**
+ * @brief A single PEG rule: a compiled pattern plus mutable behavior.
+ *
+ * Rules are created via PEGDefinition::add_rule<"...">() and remain
+ * mutable afterwards: the semantic action, channel, and the guarded
+ * (must_fail / if_succeed) behavior may be adjusted at any time.
+ *
+ * The rule is invocable with a callback to build a matcher arm:
+ *   matcher << rule([](dsl::PEGMatch& m){ ... });
+ */
+struct PEGRule
+{
+  std::string pattern_text{};
+  peg_detail::CompiledPattern compiled{};
+  PEGSemanticAction semantic_action{};
+  PEGChannel channel{ "@DEFAULT" };
+  bool must_fail{ false };    ///< succeed only when the pattern fails
+  bool fire_on_neg{ false };  ///< run the action even on negated success
+  PEGRule *if_succeed{ nullptr }; ///< rule to attempt when pattern matches
+  std::size_t order{ 0 };     ///< declaration order (PEG precedence)
+
+  /// Attempts this rule at `pos`. Returns the match end offset, or
+  /// std::nullopt on failure. For must_fail rules, success consumes one
+  /// character so tokenizing parses always make progress.
+  std::optional<std::size_t>
+  try_match (std::string_view text, std::size_t pos) const
+  {
+    if (must_fail)
+      {
+        if (compiled.match_at (text, pos))
+          return std::nullopt;
+        return pos < text.size () ? std::optional<std::size_t> (pos + 1)
+                                  : std::nullopt;
+      }
+    return compiled.match_at (text, pos);
+  }
+
+  /// Builds a match-arm binding this rule to a callback.
+  template <typename Fn>
+  peg_detail::PEGArm
+  operator() (Fn &&fn) const
+  {
+    peg_detail::PEGArm arm;
+    arm.rule = const_cast<PEGRule *> (this);
+    arm.action = std::forward<Fn> (fn);
+    return arm;
+  }
+};
+
+/**
+ * @brief Diagnostics produced by PEGDefinition::parse().
+ */
+struct PEGParseResult
+{
+  bool success{ true };
+  std::size_t offset{ 0 };
+  std::size_t line{ 1 };
+  std::size_t column{ 1 };
+  std::string message{};
+
+  bool
+  ok () const noexcept
+  {
+    return success;
+  }
+  bool
+  failed () const noexcept
+  {
+    return !success;
+  }
+  std::size_t
+  error_offset () const noexcept
+  {
+    return offset;
+  }
+  std::size_t
+  error_line () const noexcept
+  {
+    return line;
+  }
+  std::size_t
+  error_column () const noexcept
+  {
+    return column;
+  }
+  /// @return human-readable failure description (empty on success).
+  std::string_view
+  error_message () const noexcept
+  {
+    return message;
+  }
+};
+
+/**
+ * @brief A PEG grammar: an ordered set of rules plus channels and
+ * optional inheritance metadata.
+ *
+ * Create a root grammar with dsl::create_peg_definition(), or extend an
+ * existing one with dsl::derive_peg_definition(parent). Derived grammars
+ * see parent rules first (parent rules precede child rules at any
+ * decision point), and may add new rules or shadow parent behavior
+ * without mutating the parent.
+ */
+struct PEGDefinition
+{
+  const PEGDefinition *parent{ nullptr };
+
+  /// Adds a rule from a compile-time pattern string, with an optional
+  /// semantic action. Returns a reference to the stored rule; the
+  /// reference stays valid as long as rules are only appended (and this
+  /// definition is alive).
+  template <FixedString S, typename Fn>
+  PEGRule &
+  add_rule (Fn &&action)
+  {
+    return emplace_rule (S.view (),
+                         PEGSemanticAction (std::forward<Fn> (action)));
+  }
+
+  template <FixedString S>
+  PEGRule &
+  add_rule ()
+  {
+    return emplace_rule (S.view (), PEGSemanticAction{});
+  }
+
+  /// @return all rules visible at this level: parent rules first, then
+  /// local rules, preserving PEG ordered-choice precedence.
+  std::vector<const PEGRule *>
+  rules () const
+  {
+    std::vector<const PEGRule *> out;
+    if (parent)
+      out = parent->rules ();
+    for (const auto &r : local_rules_)
+      out.push_back (&r);
+    return out;
+  }
+
+  /**
+   * @brief Parses `text` token by token using ordered choice over all
+   * visible rules, invoking semantic actions as matches occur.
+   *
+   * Matches routed to @IGNORE are recognized and skipped silently.
+   * Parsing succeeds when the whole input is consumed.
+   */
+  PEGParseResult
+  parse (std::string_view text) const
+  {
+    PEGParseResult result;
+    auto all = rules ();
+    std::size_t pos = 0;
+    while (pos < text.size ())
+      {
+        bool matched = false;
+        for (const PEGRule *r : all)
+          {
+            auto end = r->try_match (text, pos);
+            if (!end)
+              continue;
+            const bool negated = r->must_fail;
+            if (!negated && *end == pos)
+              {
+                // Zero-width positive match would loop forever.
+                result.success = false;
+                result.offset = pos;
+                peg_detail::line_col_at (text, pos, result.line,
+                                         result.column);
+                result.message
+                    = "PEG rule matched empty input; refusing to loop";
+                return result;
+              }
+            matched = true;
+            if (!negated || r->fire_on_neg)
+              {
+                PEGMatch m;
+                m.value = text.substr (pos, *end - pos);
+                m.begin = pos;
+                m.end = *end;
+                m.rule = const_cast<PEGRule *> (r);
+                m.channel = r->channel;
+                m.ignored = r->channel.is_ignore ();
+                peg_detail::line_col_at (text, pos, m.line, m.column);
+                if (r->semantic_action)
+                  r->semantic_action (m);
+              }
+            if (r->if_succeed)
+              {
+                if (auto e2 = r->if_succeed->try_match (text, pos))
+                  {
+                    PEGMatch m;
+                    m.value = text.substr (pos, *e2 - pos);
+                    m.begin = pos;
+                    m.end = *e2;
+                    m.rule = r->if_succeed;
+                    m.channel = r->if_succeed->channel;
+                    m.ignored = r->if_succeed->channel.is_ignore ();
+                    peg_detail::line_col_at (text, pos, m.line, m.column);
+                    if (r->if_succeed->semantic_action)
+                      r->if_succeed->semantic_action (m);
+                  }
+              }
+            pos = *end;
+            break; // ordered choice: first success wins
+          }
+        if (!matched)
+          {
+            result.success = false;
+            result.offset = pos;
+            peg_detail::line_col_at (text, pos, result.line, result.column);
+            result.message = "no PEG rule matched at offset "
+                             + std::to_string (pos);
+            return result;
+          }
+      }
+    result.offset = pos;
+    return result;
+  }
+
+private:
+  PEGRule &
+  emplace_rule (std::string_view pat, PEGSemanticAction action)
+  {
+    PEGRule r;
+    r.pattern_text = std::string (pat);
+    r.compiled = peg_detail::CompiledPattern::compile (pat);
+    if (!r.compiled.valid)
+      throw std::invalid_argument ("dsl::PEGDefinition::add_rule: "
+                                   + r.compiled.error + " in pattern '"
+                                   + r.pattern_text + "'");
+    r.semantic_action = std::move (action);
+    r.order = next_order_++;
+    local_rules_.push_back (std::move (r));
+    return local_rules_.back ();
+  }
+
+  std::vector<PEGRule> local_rules_{};
+  std::size_t next_order_{ 0 };
+};
+
+/// Creates a root PEG definition (parent == nullptr).
+inline PEGDefinition
+create_peg_definition ()
+{
+  return PEGDefinition{};
+}
+
+/// Derives a PEG definition from `parent`; parent rules stay visible.
+inline PEGDefinition
+derive_peg_definition (const PEGDefinition &parent)
+{
+  PEGDefinition d;
+  d.parent = &parent;
+  return d;
+}
+
+/**
+ * @brief Fluent, stream-style PEG pattern matcher.
+ *
+ * Created with dsl::peg_new_matcher(peg, text). Arms are consumed with
+ * operator<<; the first arm whose rule matches at the current position
+ * wins (PEG ordered choice). The wildcard arm fires when no preceding
+ * arm matches, consuming one character by default.
+ *
+ * Channel filters (only/include/exclude) restrict which rules the rule
+ * arms will consider; ignored-channel matches are skipped automatically
+ * before any arm is consulted.
+ *
+ *   auto matcher = dsl::peg_new_matcher(peg, text);
+ *   while (!matcher.is_spent())
+ *       matcher << ident(cb) << number(cb) << matcher.wildcard(cb);
+ *   matcher.close();
+ */
+struct PEGMatcher
+{
+  const PEGDefinition *def{ nullptr };
+  std::string_view text{};
+  std::size_t pos{ 0 };
+
+  bool
+  is_spent () const noexcept
+  {
+    return pos >= text.size ();
+  }
+  std::size_t
+  position () const noexcept
+  {
+    return pos;
+  }
+  /// No-op for API symmetry; releases nothing (nothing is held).
+  void
+  close () noexcept
+  {
+  }
+
+  /// Restricts matching to a single channel.
+  PEGMatcher &
+  only (std::string_view channel)
+  {
+    mode_ = FilterMode::Only;
+    channels_.clear ();
+    channels_.push_back (std::string (channel));
+    return *this;
+  }
+  /// Adds a channel to the accepted set.
+  PEGMatcher &
+  include (std::string_view channel)
+  {
+    if (mode_ == FilterMode::Exclude)
+      mode_ = FilterMode::Only;
+    channels_.push_back (std::string (channel));
+    return *this;
+  }
+  /// Rejects rules on the given channel.
+  PEGMatcher &
+  exclude (std::string_view channel)
+  {
+    if (mode_ != FilterMode::Exclude)
+      {
+        mode_ = FilterMode::Exclude;
+        channels_.clear ();
+      }
+    channels_.push_back (std::string (channel));
+    return *this;
+  }
+  bool
+  channel_allowed (std::string_view name) const
+  {
+    if (mode_ == FilterMode::All)
+      return true;
+    bool found = std::find (channels_.begin (), channels_.end (), name)
+                 != channels_.end ();
+    return mode_ == FilterMode::Only ? found : !found;
+  }
+
+  /// Wildcard arm: fires when no rule arm matches at the position.
+  template <typename Fn>
+  peg_detail::PEGArm
+  wildcard (Fn &&fn)
+  {
+    peg_detail::PEGArm arm;
+    arm.is_wildcard = true;
+    arm.action = std::forward<Fn> (fn);
+    return arm;
+  }
+
+  /// Enqueues one match arm. Arms accumulate across chained << calls
+  /// until one of them fires at the current position; the first arm
+  /// whose rule matches wins (ordered choice). @IGNORE matches are
+  /// skipped automatically before arms are consulted.
+  PEGMatcher &
+  operator<< (const peg_detail::PEGArm &arm)
+  {
+    arms_.push_back (arm);
+    step ();
+    return *this;
+  }
+
+private:
+  /// Tries the accumulated arms once at the current position.
+  void
+  step ()
+  {
+    if (arms_.empty () || is_spent ())
+      return;
+    skip_ignored ();
+    if (is_spent ())
+      {
+        arms_.clear ();
+        return;
+      }
+    // Non-wildcard arms in order: first match wins.
+    for (std::size_t i = 0; i < arms_.size (); ++i)
+      {
+        const auto &arm = arms_[i];
+        if (arm.is_wildcard)
+          continue;
+        if (arm.is_channel)
+          {
+            for (const PEGRule *r : def->rules ())
+              {
+                if (r->channel.name != arm.channel.name)
+                  continue;
+                if (auto end = r->try_match (text, pos))
+                  {
+                    fire (arm.action, r, pos, *end);
+                    arms_.clear ();
+                    return;
+                  }
+              }
+            continue;
+          }
+        if (!arm.rule || !channel_allowed (arm.rule->channel.name))
+          continue;
+        if (auto end = arm.rule->try_match (text, pos))
+          {
+            fire (arm.action, arm.rule, pos, *end);
+            arms_.clear ();
+            return;
+          }
+      }
+    // No rule arm matched: fire the first wildcard arm, if any.
+    for (std::size_t i = 0; i < arms_.size (); ++i)
+      {
+        if (!arms_[i].is_wildcard)
+          continue;
+        PEGMatch m;
+        m.value = text.substr (pos, 1);
+        m.begin = pos;
+        m.end = pos + 1;
+        m.rule = nullptr;
+        peg_detail::line_col_at (text, pos, m.line, m.column);
+        if (arms_[i].action)
+          arms_[i].action (m);
+        ++pos; // wildcard consumes one character
+        arms_.clear ();
+        return;
+      }
+    // Nothing fired yet: keep the accumulated arms; the next << may
+    // provide one that matches at this position.
+  }
+
+  void
+  skip_ignored ()
+  {
+    bool progressed = true;
+    while (progressed && !is_spent ())
+      {
+        progressed = false;
+        for (const PEGRule *r : def->rules ())
+          {
+            if (!r->channel.is_ignore ())
+              continue;
+            if (auto end = r->try_match (text, pos))
+              {
+                if (*end == pos)
+                  continue;
+                pos = *end;
+                progressed = true;
+                break;
+              }
+          }
+      }
+  }
+
+  void
+  fire (const PEGSemanticAction &action, const PEGRule *rule,
+        std::size_t begin, std::size_t end)
+  {
+    PEGMatch m;
+    m.value = text.substr (begin, end - begin);
+    m.begin = begin;
+    m.end = end;
+    m.rule = const_cast<PEGRule *> (rule);
+    m.channel = rule->channel;
+    m.ignored = rule->channel.is_ignore ();
+    peg_detail::line_col_at (text, begin, m.line, m.column);
+    pos = end;
+    if (action)
+      action (m);
+    else if (rule->semantic_action)
+      rule->semantic_action (m);
+  }
+
+  enum class FilterMode
+  {
+    All,
+    Only,
+    Exclude
+  };
+  FilterMode mode_{ FilterMode::All };
+  std::vector<std::string> channels_{};
+  std::vector<peg_detail::PEGArm> arms_{};
+  static constexpr std::size_t npos
+      = static_cast<std::size_t> (-1);
+};
+
+/// Creates a fluent PEG matcher over `text` for the grammar `peg`.
+inline PEGMatcher
+peg_new_matcher (const PEGDefinition &peg, std::string_view text)
+{
+  PEGMatcher m;
+  m.def = &peg;
+  m.text = text;
+  return m;
+}
+
+// ============================================================
+//  PEG parser combinators
+// ============================================================
+//
+// Thin, additive wrappers over the existing dsl::Parser machinery with
+// strict PEG semantics: ordered choice (operator| already behaves
+// ordered), repetition that never commits on partial input, and
+// lookahead operators.
+
+namespace peg_detail
+{
+
+/// Converts any dsl::Parser<T> into a Parser<PEGMatch> that reports the
+/// consumed span. The output value is discarded; the span is kept.
+template <typename T>
+Parser<PEGMatch>
+as_span_parser (const Parser<T> &p)
+{
+  return parser ([p] (ParsecInput &in) -> ExpectedResult<PEGMatch> {
+    std::size_t begin = in.pos;
+    auto r = p (in);
+    if (!r)
+      return ExpectedResult<PEGMatch>::failure (r.error.pos, r.error.kind,
+                                                r.error.expected);
+    PEGMatch m;
+    m.begin = begin;
+    m.end = in.pos;
+    m.value = in.get_span (begin);
+    return m;
+  });
+}
+
+} // namespace peg_detail
+
+/// PEG sequence: parse a, then b, then c... Spans concatenate.
+template <typename A, typename B, typename... Rest>
+auto
+peg_seq (const Parser<A> &a, const Parser<B> &b, const Rest &...rest)
+{
+  auto ab = parser ([a, b] (ParsecInput &in) -> ExpectedResult<PEGMatch> {
+    std::size_t begin = in.pos;
+    auto ra = a (in);
+    if (!ra)
+      return ExpectedResult<PEGMatch>::failure (ra.error.pos, ra.error.kind,
+                                                ra.error.expected);
+    auto rb = b (in);
+    if (!rb)
+      {
+        bool consumed = in.pos != begin;
+        in.pos = begin;
+        auto kind = rb.error.kind;
+        if (consumed)
+          kind = ParseFailureKind::Committed;
+        return ExpectedResult<PEGMatch>::failure (rb.error.pos, kind,
+                                                  rb.error.expected);
+      }
+    PEGMatch m;
+    m.begin = begin;
+    m.end = in.pos;
+    m.value = in.get_span (begin);
+    return m;
+  });
+  if constexpr (sizeof...(rest) == 0)
+    return ab;
+  else
+    return peg_seq (ab, rest...);
+}
+
+/// PEG ordered choice: first successful alternative wins; later
+/// alternatives are not tried at that decision point.
+template <typename A, typename B, typename... Rest>
+auto
+peg_choice (const Parser<A> &a, const Parser<B> &b, const Rest &...rest)
+{
+  auto ab = try_parse (a) | try_parse (b);
+  if constexpr (sizeof...(rest) == 0)
+    return ab;
+  else
+    return peg_choice (ab, rest...);
+}
+
+/// PEG optional: a? (never fails, never commits).
+template <typename T>
+auto
+peg_opt (const Parser<T> &p)
+{
+  return optional (try_parse (p));
+}
+
+/// PEG zero-or-more: a* (greedy; partial failures backtrack fully).
+template <typename T>
+auto
+peg_many (const Parser<T> &p)
+{
+  return *try_parse (p);
+}
+
+/// PEG one-or-more: a+ (greedy; fails if the first iteration fails).
+template <typename T>
+auto
+peg_many1 (const Parser<T> &p)
+{
+  return p & *try_parse (p);
+}
+
+/// PEG positive lookahead: &a — succeeds if a matches, consumes nothing.
+template <typename T>
+auto
+peg_and (const Parser<T> &p)
+{
+  return parser ([p] (ParsecInput &in) -> ExpectedResult<bool> {
+    auto save = in.pos;
+    auto r = p (in);
+    in.pos = save;
+    if (!r)
+      return ExpectedResult<bool>::failure (r.error.pos, ParseFailureKind::Soft,
+                                            r.error.expected);
+    return true;
+  });
+}
+
+/// PEG negative lookahead: !a — succeeds if a fails, consumes nothing.
+template <typename T>
+auto
+peg_not (const Parser<T> &p)
+{
+  return parser ([p] (ParsecInput &in) -> ExpectedResult<bool> {
+    auto save = in.pos;
+    auto r = p (in);
+    in.pos = save;
+    if (r)
+      return fail_expected<bool> (in, "negative lookahead");
+    return true;
+  });
+}
+
+/// Adapts a PEGRule into a Parser<PEGMatch> honoring must_fail.
+inline Parser<PEGMatch>
+peg_rule (const PEGRule &rule)
+{
+  return parser ([&rule] (ParsecInput &in) -> ExpectedResult<PEGMatch> {
+    std::size_t begin = in.pos;
+    auto end = rule.try_match (in.source, begin);
+    if (!end)
+      return fail_expected<PEGMatch> (in, rule.pattern_text);
+    in.pos = *end;
+    PEGMatch m;
+    m.begin = begin;
+    m.end = *end;
+    m.value = in.source.substr (begin, *end - begin);
+    m.rule = const_cast<PEGRule *> (&rule);
+    m.channel = rule.channel;
+    m.ignored = rule.channel.is_ignore ();
+    peg_detail::line_col_at (in.source, begin, m.line, m.column);
+    return m;
+  });
+}
+
+/// Assigns a channel to a parser's PEGMatch result.
+template <typename T>
+auto
+peg_channel (PEGChannel channel, const Parser<T> &p)
+{
+  return parser ([channel = std::move (channel), p] (
+                     ParsecInput &in) -> ExpectedResult<PEGMatch> {
+    std::size_t begin = in.pos;
+    auto r = p (in);
+    if (!r)
+      return ExpectedResult<PEGMatch>::failure (r.error.pos, r.error.kind,
+                                                r.error.expected);
+    PEGMatch m;
+    m.begin = begin;
+    m.end = in.pos;
+    m.value = in.get_span (begin);
+    m.channel = channel;
+    m.ignored = channel.is_ignore ();
+    peg_detail::line_col_at (in.source, begin, m.line, m.column);
+    return m;
+  });
+}
+
+/// Overload accepting the channel name directly (must begin with '@').
+template <typename T>
+auto
+peg_channel (std::string_view name, const Parser<T> &p)
+{
+  return peg_channel (new_peg_channel (name), p);
+}
+
+// ============================================================
 //  Utility concepts
 // ============================================================
 
