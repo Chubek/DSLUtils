@@ -770,6 +770,7 @@ private:
 template <auto Key, typename F> struct WhenClause
 {
   F handler;
+  using handler_type_or_void = F;
   explicit constexpr WhenClause (F f) : handler (std::move (f)) {}
 
   template <typename K, typename... Args>
@@ -830,7 +831,16 @@ when (F &&f)
 template <typename F> struct OtherwiseClause
 {
   F handler;
+  using handler_type_or_void = F;
   explicit constexpr OtherwiseClause (F f) : handler (std::move (f)) {}
+
+  template <typename K, typename... Args>
+  constexpr bool
+  try_invoke (K, std::optional<std::invoke_result_t<F, K, Args...>> &, Args &&...)
+    const
+  {
+    return false;
+  }
 };
 
 /**
@@ -876,6 +886,7 @@ template <typename... Clauses> struct MatchTable
         typename Clauses::handler_type_or_void, Key, Args...>...>;
     // Try each when<> clause in order
     std::optional<RetT> result;
+    bool has_otherwise = false;
     bool matched = std::apply (
         [&] (const auto &...c)
           {
@@ -889,21 +900,22 @@ template <typename... Clauses> struct MatchTable
         std::apply (
             [&] (const auto &...c)
               {
-                (
-                    [&]
-                      {
-                        if constexpr (requires { c.handler (key, args...); })
-                          {
-                            if (!result)
-                              result = c.handler (
-                                  key, std::forward<Args> (args)...);
-                          }
-                      }(),
-                    ...);
+                (([&] {
+                   using Cls = std::remove_cvref_t<decltype (c)>;
+                   if constexpr (std::is_same_v<
+                                     Cls,
+                                     OtherwiseClause<typename Cls::handler_type_or_void>>)
+                     {
+                       has_otherwise = true;
+                       if (!result)
+                         result = c.handler (key, std::forward<Args> (args)...);
+                     }
+                 }()),
+                 ...);
               },
             clauses);
       }
-    if (!result)
+    if (!result && !has_otherwise)
       throw std::runtime_error (
           "dsl::match: no clause matched and no otherwise");
     return *result;
@@ -2467,7 +2479,7 @@ run (TaskState &state, const TaskChain &chain, Args &&...)
   for (const auto &task : chain.tasks)
     {
       auto result = task.run (state);
-      state.results[task.name] = result;
+    state.results.insert_or_assign (task.name, result);
       if (result.is_err () && chain.policy == TaskPolicy::StopOnError)
         break;
       if (state.suspended)
