@@ -19,10 +19,32 @@ target_link_libraries(EkippX
 
 if(TARGET Klyspec)
     target_link_libraries(EkippX PUBLIC Klyspec)
+elseif(EXISTS "${CMAKE_SOURCE_DIR}/third_party/Klyspec/Klyspec.hpp")
+    target_include_directories(EkippX PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/third_party/Klyspec>)
 endif()
 
 if(TARGET PikoRL)
     target_link_libraries(EkippX PUBLIC PikoRL)
+elseif(EXISTS "${CMAKE_SOURCE_DIR}/third_party/PikoRL/PikoRL.hpp")
+    target_include_directories(EkippX PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/third_party/PikoRL>
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/third_party/PikoRL/third_party>)
+endif()
+
+if(TARGET SerdeTk)
+    target_link_libraries(EkippX PUBLIC SerdeTk)
+elseif(EXISTS "${CMAKE_SOURCE_DIR}/third_party/SerdeTk/include/SerdeTk.hpp")
+    target_include_directories(EkippX PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/third_party/SerdeTk/include>)
+endif()
+
+if(TARGET QaMRpp)
+    target_link_libraries(EkippX PUBLIC QaMRpp)
+elseif(EXISTS "${CMAKE_SOURCE_DIR}/third_party/QaMRpp/include/QaMRpp.hpp")
+    target_include_directories(EkippX PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/third_party/QaMRpp/include>
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/third_party>)
 endif()
 
 target_compile_features(EkippX PUBLIC cxx_std_20)

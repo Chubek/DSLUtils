@@ -245,4 +245,6 @@ markdown
 
 *.diff
 
-
+AGENTS.md
+build/
+build-*/

@@ -5,6 +5,7 @@ add_library(DSLtk INTERFACE)
 target_include_directories(DSLtk
     INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
         $<INSTALL_INTERFACE:include>
 )
 
@@ -41,13 +42,3 @@ install(
     DESTINATION lib/cmake/DSLtk
 )
 
-if(BUILD_EXAMPLES)
-    file(GLOB EXAMPLES examples/*.cpp)
-
-    foreach(src ${EXAMPLES})
-        get_filename_component(name ${src} NAME_WE)
-
-        add_executable(${name} ${src})
-        target_link_libraries(${name} PRIVATE DSLtk)
-    endforeach()
-endif()
