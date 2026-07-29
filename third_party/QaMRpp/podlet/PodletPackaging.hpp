@@ -12,7 +12,8 @@
 #include <string>
 #include <vector>
 
-#include "../third_party/SerdeTk/SerdeTk.hpp"
+#include "../third_party/SerdeTk/include/MiniZIP.hpp"
+#include "../third_party/SerdeTk/include/SerdeTk.hpp"
 
 namespace qamrpp {
 namespace podlet {
@@ -252,37 +253,36 @@ inline PackageResult build_qpod(const PackageOptions& options) {
         return result;
     }
 
-    std::shared_ptr<serdetk::Object> root_obj(new serdetk::Object());
-    root_obj->set("format", serdetk::Value(std::string("qamrpp.qpod/1")));
+    minizip::api::zipper zipper = minizip::api::zipper::make_zipper();
+    zipper.set_codec(minizip::backend::codec::zstd);
+    zipper.set_archive_name(out.filename().string());
+    zipper.set_destination(out.parent_path());
 
-    std::shared_ptr<serdetk::Object> manifest_obj(new serdetk::Object());
-    for (std::map<std::string, std::string>::const_iterator it = manifest.begin(); it != manifest.end(); ++it) {
-        manifest_obj->set(it->first, serdetk::Value(it->second));
+    std::string manifest_text;
+    {
+        std::ostringstream manifest_stream;
+        for (std::map<std::string, std::string>::const_iterator it = manifest.begin(); it != manifest.end(); ++it) {
+            manifest_stream << it->first << " = " << it->second << "\n";
+        }
+        manifest_text = manifest_stream.str();
     }
-    root_obj->set("manifest", serdetk::Value(manifest_obj));
+    zipper.add_bytes(
+        "meta/Podpack.qmr",
+        std::as_bytes(std::span<const char>(manifest_text.data(), manifest_text.size())),
+        "text/plain"
+    );
 
-    std::shared_ptr<serdetk::Object> files_obj(new serdetk::Object());
     for (std::size_t i = 0; i < file_paths.size(); ++i) {
         std::vector<std::uint8_t> bytes;
         const std::filesystem::path abs = root / file_paths[i];
         if (!read_file_bytes(abs, bytes, result.error)) {
             return result;
         }
-        files_obj->set(
+        zipper.add_bytes(
             file_paths[i],
-            serdetk::Value(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()))
+            std::as_bytes(std::span<const std::uint8_t>(bytes.data(), bytes.size())),
+            "application/octet-stream"
         );
-    }
-    root_obj->set("files", serdetk::Value(files_obj));
-
-    serdetk::Document doc;
-    doc.root = serdetk::Value(root_obj);
-    std::vector<std::uint8_t> packed;
-    try {
-        packed = serdetk::builtins::messagepack().dump_bytes(doc);
-    } catch (const std::exception& e) {
-        result.error = std::string("failed to serialize qpod: ") + e.what();
-        return result;
     }
 
     const std::filesystem::path parent = out.parent_path();
@@ -294,19 +294,20 @@ inline PackageResult build_qpod(const PackageOptions& options) {
             return result;
         }
     }
-    std::ofstream stream(out, std::ios::out | std::ios::binary | std::ios::trunc);
-    if (!stream.good()) {
-        result.error = "failed to open output file: " + out.string();
-        return result;
-    }
-    stream.write(reinterpret_cast<const char*>(packed.data()), static_cast<std::streamsize>(packed.size()));
-    if (!stream.good()) {
-        result.error = "failed to write output file: " + out.string();
+
+    try {
+        const minizip::api::archive_result archive = zipper.build();
+        if (!archive.ok()) {
+            result.error = archive.message;
+            return result;
+        }
+    } catch (const std::exception& e) {
+        result.error = std::string("failed to build qpod: ") + e.what();
         return result;
     }
 
     result.ok = true;
-    result.file_count = file_paths.size();
+    result.file_count = file_paths.size() + 1;
     return result;
 }
 

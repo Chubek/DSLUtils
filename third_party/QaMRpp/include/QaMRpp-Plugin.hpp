@@ -6,7 +6,7 @@
 
 #include <string>
 
-#include "../lib/QaMRpp-Library.h"
+#include "../qlib/C/QaMRpp-Library.h"
 
 namespace qamrpp {
 

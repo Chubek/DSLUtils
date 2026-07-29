@@ -7,6 +7,7 @@ This document defines the initial Podlet runtime contract and `.qpod` shape, imp
 - Preserve existing `load_library` / `load_library_named` behavior.
 - Add Podlet discovery as fallback, not replacement.
 - Keep runtime loading independent from CLI/packaging orchestration.
+- Align discovery and install roots with `QAMRPP_HOME` defaults.
 
 ## Manifest (minimal v1)
 
@@ -68,6 +69,6 @@ For `load_library_named("<name>")`, Podlet fallback probes:
 - `<root>/<name>.qpod`
 - `<root>/podlet/<name>.qpod`
 
-where `<root>` comes from existing QaMRpp search roots (`QAMRPP_PATH`, `~/.qamrpp`, `.`).
+where `<root>` comes from existing QaMRpp search roots (`QAMRPP_PATH`, `$QAMRPP_HOME/lib/stdlua`, `$QAMRPP_HOME`, `~/.qamrpp`, `.`).
 
-This makes `~/.qamrpp/podlet` naturally supported without replacing current roots.
+This makes `$QAMRPP_HOME/podlet` naturally supported without replacing current roots.

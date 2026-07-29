@@ -10,6 +10,8 @@ Podlet runtime integration is attached to existing package loading, not a parall
 Podlet discovery roots reuse existing search roots:
 
 - `QAMRPP_PATH` entries
+- `$QAMRPP_HOME/lib/stdlua`
+- `$QAMRPP_HOME`
 - `~/.qamrpp`
 - current directory (`.`)
 
@@ -60,6 +62,10 @@ Responsibilities:
 - SerdeTk-backed MessagePack archive emission
 
 This API is CLI-agnostic by design; `podpack` is a thin wrapper over this layer.
+
+## Install layout
+
+Managed Podlet archives are installed under `$QAMRPP_HOME/podlet` (`~/.qamrpp/podlet` by default). The main CLI exposes the same root through `--install-podlet` and `--remove-podlet`.
 
 ## Compatibility guarantees
 

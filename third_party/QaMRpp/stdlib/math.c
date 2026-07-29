@@ -1,9 +1,10 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
-#include "../lib/QaMRpp-Library.h"
+#include "../qlib/C/QaMRpp-Library.h"
 
 static const qamrpp_host_api* g_api = 0;
 
@@ -16,6 +17,8 @@ static qamrpp_value* math_abs(qamrpp_context* ctx, qamrpp_value** argv, size_t a
 static qamrpp_value* math_acos(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { return g_api->value_float(ctx, acos(argf(argv, argc, 0))); }
 static qamrpp_value* math_asin(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { return g_api->value_float(ctx, asin(argf(argv, argc, 0))); }
 static qamrpp_value* math_atan(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { return g_api->value_float(ctx, atan(argf(argv, argc, 0))); }
+static qamrpp_value* math_atan2(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { return g_api->value_float(ctx, atan2(argf(argv, argc, 0), argf(argv, argc, 1))); }
+static qamrpp_value* math_cosh(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { return g_api->value_float(ctx, cosh(argf(argv, argc, 0))); }
 static qamrpp_value* math_ceil(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { return g_api->value_float(ctx, ceil(argf(argv, argc, 0))); }
 static qamrpp_value* math_cos(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { return g_api->value_float(ctx, cos(argf(argv, argc, 0))); }
 static qamrpp_value* math_deg(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { return g_api->value_float(ctx, argf(argv, argc, 0) * 57.29577951308232); }
@@ -37,18 +40,20 @@ static qamrpp_value* math_random(qamrpp_context* ctx, qamrpp_value** argv, size_
 }
 static qamrpp_value* math_randomseed(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { srand((unsigned int)argf(argv, argc, 0)); return g_api->value_nil(ctx); }
 static qamrpp_value* math_sin(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { return g_api->value_float(ctx, sin(argf(argv, argc, 0))); }
+static qamrpp_value* math_sinh(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { return g_api->value_float(ctx, sinh(argf(argv, argc, 0))); }
 static qamrpp_value* math_sqrt(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { return g_api->value_float(ctx, sqrt(argf(argv, argc, 0))); }
 static qamrpp_value* math_tan(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { return g_api->value_float(ctx, tan(argf(argv, argc, 0))); }
+static qamrpp_value* math_tanh(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { return g_api->value_float(ctx, tanh(argf(argv, argc, 0))); }
 static qamrpp_value* math_tointeger(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { return g_api->value_int(ctx, (int64_t)argf(argv, argc, 0)); }
 static qamrpp_value* math_type(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { return g_api->value_string(ctx, (argc && g_api->value_get_type(argv[0]) == QAMRPP_TYPE_INT) ? "integer" : "float", (argc && g_api->value_get_type(argv[0]) == QAMRPP_TYPE_INT) ? 7 : 5); }
 static qamrpp_value* math_ult(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { uint64_t a = (uint64_t)argf(argv, argc, 0); uint64_t b = (uint64_t)argf(argv, argc, 1); return g_api->value_bool(ctx, a < b); }
 
 static qamrpp_native_binding kBindings[] = {
     {"math_abs", math_abs}, {"math_acos", math_acos}, {"math_asin", math_asin}, {"math_atan", math_atan},
-    {"math_ceil", math_ceil}, {"math_cos", math_cos}, {"math_deg", math_deg}, {"math_exp", math_exp},
+    {"math_ceil", math_ceil}, {"math_cos", math_cos}, {"math_atan2", math_atan2}, {"math_cosh", math_cosh}, {"math_deg", math_deg}, {"math_exp", math_exp},
     {"math_floor", math_floor}, {"math_fmod", math_fmod}, {"math_log", math_log}, {"math_max", math_max},
     {"math_min", math_min}, {"math_modf", math_modf}, {"math_rad", math_rad}, {"math_random", math_random},
-    {"math_randomseed", math_randomseed}, {"math_sin", math_sin}, {"math_sqrt", math_sqrt}, {"math_tan", math_tan},
+    {"math_randomseed", math_randomseed}, {"math_sin", math_sin}, {"math_sinh", math_sinh}, {"math_sqrt", math_sqrt}, {"math_tan", math_tan}, {"math_tanh", math_tanh},
     {"math_tointeger", math_tointeger}, {"math_type", math_type}, {"math_ult", math_ult}
 };
 
@@ -59,6 +64,11 @@ static int on_load(qamrpp_context* ctx, const qamrpp_host_api* host_api) {
     g_api->set_global(ctx, "math_maxinteger", g_api->value_int(ctx, INT64_MAX));
     g_api->set_global(ctx, "math_mininteger", g_api->value_int(ctx, INT64_MIN));
     srand((unsigned int)time(NULL));
+    qamrpp_value* table = g_api->value_table(ctx);
+    for (size_t i = 0; i < sizeof(kBindings) / sizeof(kBindings[0]); ++i) { const char* name = strchr(kBindings[i].name, '_') + 1; g_api->table_raw_set(ctx, table, g_api->value_string(ctx, name, strlen(name)), g_api->get_global(ctx, kBindings[i].name)); }
+    g_api->table_raw_set(ctx, table, g_api->value_string(ctx, "pi", 2), g_api->get_global(ctx, "math_pi"));
+    g_api->table_raw_set(ctx, table, g_api->value_string(ctx, "huge", 4), g_api->get_global(ctx, "math_huge"));
+    g_api->set_global(ctx, "math", table);
     return 0;
 }
 

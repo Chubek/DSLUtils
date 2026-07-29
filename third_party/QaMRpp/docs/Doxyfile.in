@@ -10,10 +10,9 @@ OUTPUT_LANGUAGE       = English
 # Input
 INPUT                  = \
   @PROJECT_SOURCE_DIR@/include \
-  @PROJECT_SOURCE_DIR@/lib \
+  @PROJECT_SOURCE_DIR@/qlib \
   @PROJECT_SOURCE_DIR@/plugins \
   @PROJECT_SOURCE_DIR@/stdlib \
-  @PROJECT_SOURCE_DIR@/stdlib++ \
   @PROJECT_SOURCE_DIR@/cli \
   @PROJECT_SOURCE_DIR@/podlet \
   @PROJECT_SOURCE_DIR@/docs/FrontPage.md \

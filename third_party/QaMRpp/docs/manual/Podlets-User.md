@@ -47,12 +47,19 @@ podpack --install hello_podlet.qpod
 
 Default install root:
 
-- `~/.qamrpp/podlet`
+- `$QAMRPP_HOME/podlet` (`~/.qamrpp/podlet` by default)
 
 Override root:
 
 ```bash
 podpack --install hello_podlet.qpod --root /custom/path
+```
+
+The runtime also accepts direct management through `qamrpp-cli`:
+
+```bash
+qamrpp-cli --install-podlet hello_podlet.qpod
+qamrpp-cli --remove-podlet hello_podlet
 ```
 
 ## Load a Podlet in runtime

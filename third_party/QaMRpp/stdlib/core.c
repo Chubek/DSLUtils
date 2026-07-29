@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../lib/QaMRpp-Library.h"
+#include "../qlib/C/QaMRpp-Library.h"
 
 static const qamrpp_host_api* g_api = 0;
 
@@ -36,6 +36,7 @@ static qamrpp_value* lib_type(qamrpp_context* ctx, qamrpp_value** argv, size_t a
             case QAMRPP_TYPE_STRING: t = "string"; break;
             case QAMRPP_TYPE_FUNCTION: t = "function"; break;
             case QAMRPP_TYPE_USERDATA: t = "userdata"; break;
+            case QAMRPP_TYPE_TABLE: t = "table"; break;
             default: t = "nil"; break;
         }
     }
@@ -110,9 +111,15 @@ static qamrpp_value* lib_rawequal(qamrpp_context* ctx, qamrpp_value** argv, size
 }
 
 static qamrpp_value* lib_select(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) {
+    (void)argv;
     if (argc == 0) return g_api->value_int(ctx, 0);
     return g_api->value_int(ctx, (int64_t)(argc - 1));
 }
+
+static qamrpp_value* lib_rawget(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { if (argc < 2) return g_api->value_nil(ctx); return g_api->table_raw_get(ctx, argv[0], argv[1]); }
+static qamrpp_value* lib_rawset(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { if (argc < 3) return g_api->value_nil(ctx); g_api->table_raw_set(ctx, argv[0], argv[1], argv[2]); return argv[0]; }
+static qamrpp_value* lib_getmetatable(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { return argc ? g_api->value_get_metatable(ctx, argv[0]) : g_api->value_nil(ctx); }
+static qamrpp_value* lib_setmetatable(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { if (argc < 2) return g_api->value_nil(ctx); g_api->value_set_metatable(ctx, argv[0], argv[1]); return argv[0]; }
 
 static qamrpp_value* lib_pcall(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { (void)argv; (void)argc; return g_api->value_bool(ctx, 0); }
 static qamrpp_value* lib_xpcall(qamrpp_context* ctx, qamrpp_value** argv, size_t argc) { (void)argv; (void)argc; return g_api->value_bool(ctx, 0); }
@@ -120,16 +127,17 @@ static qamrpp_value* lib_nil(qamrpp_context* ctx, qamrpp_value** argv, size_t ar
 
 static qamrpp_native_binding kBindings[] = {
     {"assert", lib_assert}, {"collectgarbage", lib_nil}, {"dofile", lib_nil}, {"error", lib_error},
-    {"getmetatable", lib_nil}, {"ipairs", lib_nil}, {"load", lib_nil}, {"loadfile", lib_nil},
+    {"getmetatable", lib_getmetatable}, {"ipairs", lib_nil}, {"load", lib_nil}, {"loadfile", lib_nil},
     {"next", lib_nil}, {"pairs", lib_nil}, {"pcall", lib_pcall}, {"print", lib_print},
-    {"rawequal", lib_rawequal}, {"rawget", lib_nil}, {"rawlen", lib_nil}, {"rawset", lib_nil},
-    {"require", lib_nil}, {"select", lib_select}, {"setmetatable", lib_nil}, {"tonumber", lib_tonumber},
+    {"rawequal", lib_rawequal}, {"rawget", lib_rawget}, {"rawlen", lib_nil}, {"rawset", lib_rawset},
+    {"require", lib_nil}, {"select", lib_select}, {"setmetatable", lib_setmetatable}, {"tonumber", lib_tonumber},
     {"tostring", lib_tostring}, {"type", lib_type}, {"xpcall", lib_xpcall}
 };
 
 static int on_load(qamrpp_context* ctx, const qamrpp_host_api* host_api) {
     g_api = host_api;
     g_api->set_global(ctx, "_VERSION", g_api->value_string(ctx, "Lua 5.4", 7));
+    g_api->set_global(ctx, "_G", g_api->value_table(ctx));
     return 0;
 }
 

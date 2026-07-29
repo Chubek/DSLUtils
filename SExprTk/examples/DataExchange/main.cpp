@@ -10,6 +10,9 @@ int main() {
 
     std::cout << "sexpr: " << sexprtk::Serializer::to_string(cartable.root) << '\n';
     std::cout << "json:  " << sexprtk::Serializer::to_json(cartable.root) << '\n';
-    std::cout << "atoms: " << sexprtk::Analyzer::count_atoms(cartable.root) << '\n';
-    std::cout << "lists: " << sexprtk::Analyzer::count_lists(cartable.root) << '\n';
+
+    sexprtk::ShapeAnalyzer shape;
+    auto analysis = shape.analyze(cartable);
+    std::cout << "atoms: " << analysis.get_count("atoms") << '\n';
+    std::cout << "lists: " << analysis.get_count("lists") << '\n';
 }

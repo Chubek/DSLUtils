@@ -7,7 +7,7 @@
 - `require` currently resolves to a stub native in `stdlib/core.c` and is not an active package resolution pipeline yet.
 - Package standard library loading is currently a thin dynamic-library load through `stdlib::load_package` and `Context::load_library_named`.
 - Runtime already exposes the required value/table/metatable/error/context/global APIs needed for Podlet materialization.
-- Existing named library search roots (`QAMRPP_PATH`, `~/.qamrpp`, `.`) can be reused for Podlet discovery.
+- Existing named library search roots (`QAMRPP_PATH`, `$QAMRPP_HOME/lib/stdlua`, `$QAMRPP_HOME`, `~/.qamrpp`, `.`) can be reused for Podlet discovery.
 
 ### Changed
 
@@ -51,7 +51,7 @@
   - `podpack [source_dir] [--output file.qpod]` to build archives
   - `podpack --init [dir]` to scaffold `Podlet.cpp` and `Podpack.qmr`
   - `podpack --install <file.qpod> [--root install_root]` to install archives
-- Default install root: `~/.qamrpp/podlet` (fallback `.qamrpp/podlet` if `HOME` unset)
+- Default install root: `$QAMRPP_HOME/podlet` (fallback `~/.qamrpp/podlet` if unset)
 - CMake wiring for `podpack` executable + install rule.
 
 ### Added tests

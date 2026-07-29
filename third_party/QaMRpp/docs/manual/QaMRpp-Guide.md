@@ -85,6 +85,9 @@ QaMRpp can load shared objects in two ways:
 The named loader resolves platform-specific filenames (`libqamrpp_<name>.so` on Linux) across roots such as:
 
 - directories from `QAMRPP_PATH` (colon-separated)
+- `$QAMRPP_HOME/lib/stdlua`
+- `$QAMRPP_HOME`
+- `~/.qamrpp/lib/stdlua`
 - `~/.qamrpp`
 - current directory
 
@@ -97,6 +100,8 @@ This allows simple deployment of stdlib and third-party modules.
 ```cpp
 ctx.load_standard_library(qamrpp::StdLib::CORE | qamrpp::StdLib::MATH);
 ```
+
+`QAMRPP_HOME` defaults to `~/.qamrpp`. The runtime resolves the standard library root as `$QAMRPP_HOME/lib/stdlua`.
 
 ### Linker usage
 
@@ -194,7 +199,7 @@ Use these in module startup paths to fail early and consistently.
 1. Include `QaMRpp-Library.h` in your module.
 2. Link against compiled `QaMRpp-Library.c` helper object/library.
 3. Export descriptor and binding table.
-4. Deploy resulting `.so` into `QAMRPP_PATH` location or `~/.qamrpp`.
+4. Deploy resulting `.so` into `$QAMRPP_HOME/lib/stdlua` or any directory inside `QAMRPP_PATH`.
 
 ---
 
@@ -222,7 +227,7 @@ Set:
 ### Step 4: Build as shared object
 
 - Linux: `-shared -fPIC`
-- place result in `~/.qamrpp` or any directory inside `QAMRPP_PATH`
+- place result in `$QAMRPP_HOME/lib/stdlua` or any directory inside `QAMRPP_PATH`
 
 ### Step 5: Load from host
 
@@ -337,9 +342,17 @@ Supported modes and flags include:
 - `--script` / `-s`: run scripts matching glob patterns.
 - `--require`: preload Lua files before main script runs.
 - `--load`: load native library by path or named lookup.
+- `--install-library`: copy a shared library into `$QAMRPP_HOME/lib/stdlua`.
+- `--remove-library`: remove a shared library from `$QAMRPP_HOME/lib/stdlua`.
+- `--install-podlet`: copy a `.qpod` archive into `$QAMRPP_HOME/podlet`.
+- `--remove-podlet`: remove a `.qpod` archive from `$QAMRPP_HOME/podlet`.
+- `--name`: override the managed artifact name.
+- `--root`: override the management root.
 - `--dump <file>`: enable DOT AST dump output.
 - `--serialize`: print JSON serialization for current program stage.
 - `--qbf <bundle>`: load bundle file entries into linker pipeline.
+
+Install/remove is a management mode. It is exclusive with execution flags and does not enter REPL/script execution.
 
 ### `cli/qamrpp-assembler.cpp`
 
@@ -369,7 +382,11 @@ Top-level CMake includes stdlib shared module builds and optional CLI builds.
 
 ### Stdlib installation
 
-Stdlib modules are built as shared libraries and installed into `~/.qamrpp`, making named runtime loads straightforward.
+Stdlib modules are built as shared libraries and installed into `$QAMRPP_HOME/lib/stdlua` (`~/.qamrpp/lib/stdlua` by default), making named runtime loads straightforward.
+
+### qlib installation
+
+The installer ships the full `qlib/` tree into the include prefix, not just the flattened ABI headers. That keeps the C, C++, and D helper files colocated under the installed include root.
 
 ### Documentation build system
 
@@ -408,7 +425,7 @@ Expose a `sha256(text)` function to scripts through the C library ABI.
 ### Integration
 
 - Build as `libqamrpp_crypto.so`.
-- Install to `~/.qamrpp`.
+- Install to `$QAMRPP_HOME/lib/stdlua`.
 - Load with `ctx.load_library_named("crypto")`.
 
 ### Lessons
@@ -518,6 +535,94 @@ Minimal migration:
 1. Keep your existing descriptor export (`QAMRPP_LIBRARY_EXPORT_DESCRIPTOR`).
 2. Add descriptor validation in tests/CI.
 3. Replace direct host API pointer access with wrapper helpers incrementally.
+
+---
+
+## Chapter 13 — Roots, Layout, and Package Management
+
+QaMRpp uses one user-local root for runtime-managed assets:
+
+- `QAMRPP_HOME` if set;
+- `QAMRPP_PREFIX_DIR` as a configure-time alias;
+- `~/.qamrpp` as the fallback.
+
+Derived roots:
+
+- `$QAMRPP_HOME/lib/stdlua` — native standard libraries and installed shared libraries;
+- `$QAMRPP_HOME/podlet` — installed Podlet archives;
+- `$QAMRPP_HOME/stdc` — C sources for `load_stdc`;
+- `$QAMRPP_HOME/stdc++` — C++ sources for `load_stdcpp`.
+
+The runtime exposes these paths through:
+
+- `Context::home_root()`
+- `Context::library_root()`
+- `Context::podlet_root()`
+- `Context::stdc_root()`
+- `Context::stdcpp_root()`
+
+Management helpers:
+
+- `Context::install_library(...)`
+- `Context::remove_library(...)`
+- `Context::install_podlet(...)`
+- `Context::remove_podlet(...)`
+
+Standard library removal is rejected.
+
+---
+
+## Chapter 14 — Native Library and Podlet Management CLI
+
+`qamrpp-cli` supports explicit artifact management:
+
+### Native libraries
+
+```bash
+qamrpp-cli --install-library /path/to/libqamrpp_crypto.so
+qamrpp-cli --install-library /path/to/libqamrpp_crypto.so --name crypto
+qamrpp-cli --remove-library crypto
+```
+
+Behavior:
+
+- destination defaults to `$QAMRPP_HOME/lib/stdlua`;
+- `--name` overrides the install basename;
+- platform filename canonicalization preserves `libqamrpp_` and the shared-object suffix;
+- standard library names cannot be removed.
+
+### Podlets
+
+```bash
+qamrpp-cli --install-podlet hello.qpod
+qamrpp-cli --remove-podlet hello
+```
+
+Behavior:
+
+- destination defaults to `$QAMRPP_HOME/podlet`;
+- `.qpod` suffix is canonicalized automatically;
+- management mode is exclusive with execution mode.
+
+---
+
+## Chapter 15 — qlib Shipping and Installed Header Tree
+
+The install tree preserves the full `qlib/` directory:
+
+- `${CMAKE_INSTALL_INCLUDEDIR}/qamrpp/QaMRpp-Library.h`
+- `${CMAKE_INSTALL_INCLUDEDIR}/qamrpp/QaMRpp-Library.hpp`
+- `${CMAKE_INSTALL_INCLUDEDIR}/qamrpp/qlib/...`
+
+This keeps the ABI headers and their ancillary source/interface files available to downstream consumers that include from the installed prefix.
+
+Installed runtime assets:
+
+- `${QAMRPP_HOME}/lib/stdlua`
+- `${QAMRPP_HOME}/podlet`
+- `${QAMRPP_HOME}/stdc`
+- `${QAMRPP_HOME}/stdc++`
+- `${QAMRPP_HOME}/bin`
 4. Use explicit error codes/messages on every failure branch.
 
 ### `QaMRpp-Plugin.hpp`

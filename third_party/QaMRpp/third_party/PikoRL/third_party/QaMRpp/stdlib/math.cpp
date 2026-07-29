@@ -1,4 +1,4 @@
-#include "../QaMRpp.hpp"
+#include "../include/QaMRpp.hpp"
 
 namespace qamrpp {
 namespace stdlib {

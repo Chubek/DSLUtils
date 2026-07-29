@@ -54,7 +54,7 @@ A concise production checklist for third-party QaMRpp native libraries and descr
 ## 7) Pre-release verification
 
 - [ ] Module loads by full path (`--load ./libqamrpp_<name>.so`).
-- [ ] Module loads by name from search path (`--load <name>` with `QAMRPP_PATH`/`~/.qamrpp`).
+- [ ] Module loads by name from search path (`--load <name>` with `QAMRPP_PATH`/`$QAMRPP_HOME/lib/stdlua`).
 - [ ] Happy-path and error-path tests both pass.
 - [ ] No unresolved dynamic symbols at runtime.
 
@@ -65,4 +65,3 @@ cmake -S . -B build
 cmake --build build -j
 ./build/cli/qamrpp-cli --load <module> --script "tests/scripts/*.lua"
 ```
-

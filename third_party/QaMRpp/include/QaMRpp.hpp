@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <dirent.h>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -31,7 +32,7 @@
 #include <dlfcn.h>
 #endif
 
-#include "../third_party/SerdeTk/SerdeTk.hpp"
+#include "SerdeTk.hpp"
 #include "QaMRpp-Plugin.hpp"
 
 extern "C" {
@@ -1432,6 +1433,35 @@ private:
 
 class Context {
 public:
+    static std::string home_root() {
+        const char* qamrpp_home = std::getenv("QAMRPP_HOME");
+        if (!qamrpp_home || !*qamrpp_home) qamrpp_home = std::getenv("QAMRPP_PREFIX_DIR");
+        if (qamrpp_home && *qamrpp_home) {
+            return std::string(qamrpp_home);
+        }
+        const char* home = std::getenv("HOME");
+        if (home && *home) {
+            return std::string(home) + "/.qamrpp";
+        }
+        return ".qamrpp";
+    }
+
+    static std::string library_root() {
+        return home_root() + "/lib/stdlua";
+    }
+
+    static std::string podlet_root() {
+        return home_root() + "/podlet";
+    }
+
+    static std::string stdc_root() {
+        return home_root() + "/stdc";
+    }
+
+    static std::string stdcpp_root() {
+        return home_root() + "/stdc++";
+    }
+
     std::map<std::string, ValuePtr> globals;
     std::vector<std::map<std::string, ValuePtr>> scopes;
     void* c_userdata = nullptr;
@@ -1467,6 +1497,59 @@ public:
 
     ~Context() {
         unload_plugins();
+    }
+
+    bool install_library(
+        const std::string& source,
+        const std::string& target_name = "",
+        const std::string& root = ""
+    ) {
+        return install_file_into_root(
+            source,
+            library_file_name(normalize_library_name(source, target_name)),
+            root.empty() ? library_root() : root,
+            "library"
+        );
+    }
+
+    bool remove_library(
+        const std::string& name,
+        const std::string& root = ""
+    ) {
+        const std::string normalized = normalize_library_name(name, "");
+        if (is_standard_library_name(normalized)) {
+            set_runtime_error("standard library cannot be removed: " + normalized);
+            return false;
+        }
+        return remove_file_from_root(
+            library_file_name(normalized),
+            root.empty() ? library_root() : root,
+            "library"
+        );
+    }
+
+    bool install_podlet(
+        const std::string& source,
+        const std::string& target_name = "",
+        const std::string& root = ""
+    ) {
+        return install_file_into_root(
+            source,
+            podlet_file_name(normalize_podlet_name(source, target_name)),
+            root.empty() ? podlet_root() : root,
+            "podlet"
+        );
+    }
+
+    bool remove_podlet(
+        const std::string& name,
+        const std::string& root = ""
+    ) {
+        return remove_file_from_root(
+            podlet_file_name(normalize_podlet_name(name, "")),
+            root.empty() ? podlet_root() : root,
+            "podlet"
+        );
     }
 
     void register_native(
@@ -1834,11 +1917,8 @@ public:
 
     bool load_library_named(const std::string& name) {
         const std::vector<std::string> roots = library_search_roots();
-        for (size_t i = 0; i < roots.size(); ++i) {
-            const std::string candidate = roots[i] + "/" + library_file_name(name);
-            if (load_library(candidate)) {
-                return true;
-            }
+        if (load_named_from_roots(name, roots)) {
+            return true;
         }
         return load_podlet_named(name, roots);
     }
@@ -2182,16 +2262,16 @@ public:
     }
 
     void load_standard_library(StdLib libs = StdLib::ALL) {
-        if ((libs & StdLib::CORE) != StdLib::NONE) (void)load_library_named("core");
-        if ((libs & StdLib::STRING) != StdLib::NONE) (void)load_library_named("string");
-        if ((libs & StdLib::TABLE) != StdLib::NONE) (void)load_library_named("table");
-        if ((libs & StdLib::MATH) != StdLib::NONE) (void)load_library_named("math");
-        if ((libs & StdLib::IO) != StdLib::NONE) (void)load_library_named("io");
-        if ((libs & StdLib::OS) != StdLib::NONE) (void)load_library_named("os");
-        if ((libs & StdLib::DEBUGLIB) != StdLib::NONE) (void)load_library_named("debug");
-        if ((libs & StdLib::COROUTINE) != StdLib::NONE) (void)load_library_named("coroutine");
-        if ((libs & StdLib::PACKAGE) != StdLib::NONE) (void)load_library_named("package");
-        if ((libs & StdLib::UTF8) != StdLib::NONE) (void)load_library_named("utf8");
+        if ((libs & StdLib::CORE) != StdLib::NONE) (void)load_standard_library_named("core");
+        if ((libs & StdLib::STRING) != StdLib::NONE) (void)load_standard_library_named("string");
+        if ((libs & StdLib::TABLE) != StdLib::NONE) (void)load_standard_library_named("table");
+        if ((libs & StdLib::MATH) != StdLib::NONE) (void)load_standard_library_named("math");
+        if ((libs & StdLib::IO) != StdLib::NONE) (void)load_standard_library_named("io");
+        if ((libs & StdLib::OS) != StdLib::NONE) (void)load_standard_library_named("os");
+        if ((libs & StdLib::DEBUGLIB) != StdLib::NONE) (void)load_standard_library_named("debug");
+        if ((libs & StdLib::COROUTINE) != StdLib::NONE) (void)load_standard_library_named("coroutine");
+        if ((libs & StdLib::PACKAGE) != StdLib::NONE) (void)load_standard_library_named("package");
+        if ((libs & StdLib::UTF8) != StdLib::NONE) (void)load_standard_library_named("utf8");
     }
 
     bool load_stdc(const std::string& path) {
@@ -2261,6 +2341,27 @@ private:
 #endif
     }
 
+    static bool is_standard_library_name(const std::string& name) {
+        static const char* const kNames[] = {
+            "core",
+            "string",
+            "table",
+            "math",
+            "io",
+            "os",
+            "debug",
+            "coroutine",
+            "package",
+            "utf8"
+        };
+        for (size_t i = 0; i < sizeof(kNames) / sizeof(kNames[0]); ++i) {
+            if (name == kNames[i]) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     static std::vector<std::string> library_search_roots() {
         std::vector<std::string> roots;
         const char* env = std::getenv("QAMRPP_PATH");
@@ -2275,31 +2376,26 @@ private:
                 start = end + 1;
             }
         }
-        const char* qamrpp_home = std::getenv("QAMRPP_HOME");
-        if (qamrpp_home && *qamrpp_home) {
-            roots.push_back(std::string(qamrpp_home));
-        } else {
-            const char* home = std::getenv("HOME");
-            if (home && *home) {
-                roots.push_back(std::string(home) + "/.qamrpp");
-            }
-        }
+        roots.push_back(library_root());
+        roots.push_back(home_root());
+        roots.push_back(".");
+        return roots;
+    }
+
+    static std::vector<std::string> standard_library_search_roots() {
+        std::vector<std::string> roots;
+        roots.push_back(library_root());
+        roots.push_back(home_root());
         roots.push_back(".");
         return roots;
     }
 
     static std::string default_stdc_root() {
-        const char* qamrpp_home = std::getenv("QAMRPP_HOME");
-        if (qamrpp_home && *qamrpp_home) return std::string(qamrpp_home) + "/stdc";
-        const char* home = std::getenv("HOME");
-        return (home && *home) ? std::string(home) + "/.qamrpp/stdc" : ".qamrpp/stdc";
+        return stdc_root();
     }
 
     static std::string default_stdcpp_root() {
-        const char* qamrpp_home = std::getenv("QAMRPP_HOME");
-        if (qamrpp_home && *qamrpp_home) return std::string(qamrpp_home) + "/stdc++";
-        const char* home = std::getenv("HOME");
-        return (home && *home) ? std::string(home) + "/.qamrpp/stdc++" : ".qamrpp/stdc++";
+        return stdcpp_root();
     }
 
     static bool has_suffix(const std::string& value, const std::string& suffix) {
@@ -2317,6 +2413,48 @@ private:
             return value.substr(0, value.size() - 5);
         }
         return value;
+    }
+
+    static std::string trim_copy_simple(std::string text) {
+        while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front()))) {
+            text.erase(text.begin());
+        }
+        while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) {
+            text.pop_back();
+        }
+        return text;
+    }
+
+    static std::string unquote_copy_simple(std::string text) {
+        text = trim_copy_simple(text);
+        if (text.size() >= 2) {
+            const char first = text.front();
+            const char last = text.back();
+            if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
+                return text.substr(1, text.size() - 2);
+            }
+        }
+        return text;
+    }
+
+    static bool parse_qmr_manifest_text(const std::string& text, std::map<std::string, std::string>& out) {
+        std::istringstream in(text);
+        std::string line;
+        while (std::getline(in, line)) {
+            line = trim_copy_simple(line);
+            if (line.empty() || line[0] == '#') continue;
+            const std::size_t eq = line.find('=');
+            const std::size_t colon = line.find(':');
+            std::size_t sep = std::string::npos;
+            if (eq != std::string::npos && colon != std::string::npos) sep = std::min(eq, colon);
+            else if (eq != std::string::npos) sep = eq;
+            else sep = colon;
+            if (sep == std::string::npos) continue;
+            const std::string key = trim_copy_simple(line.substr(0, sep));
+            const std::string value = unquote_copy_simple(line.substr(sep + 1));
+            if (!key.empty()) out[key] = value;
+        }
+        return true;
     }
 
     void set_runtime_error(const std::string& message) {
@@ -2373,77 +2511,31 @@ private:
     }
 
     bool load_podlet_archive_from_path(const std::string& path, const std::string& requested_name) {
-        std::ifstream in(path.c_str(), std::ios::in | std::ios::binary);
-        if (!in.good()) {
+        minizip::api::result<minizip::api::extractor> opened = minizip::api::extractor::open(path);
+        if (!opened.ok()) {
+            set_runtime_error(opened.message());
             return false;
         }
-        std::vector<std::uint8_t> bytes(
-            (std::istreambuf_iterator<char>(in)),
-            std::istreambuf_iterator<char>()
-        );
-        if (bytes.empty()) {
-            set_runtime_error("podlet archive is empty: " + path);
-            return false;
-        }
-        
-        serdetk::Document podlet_doc;
-        try {
-            podlet_doc = serdetk::builtins::messagepack().load_bytes(bytes);
-        } catch (const std::exception& e) {
-            set_runtime_error(std::string("invalid podlet archive: ") + e.what());
+        minizip::api::extractor extractor = std::move(opened.value());
+        minizip::api::result<void> verified = extractor.verify();
+        if (!verified.ok()) {
+            set_runtime_error(verified.message());
             return false;
         }
 
-        if (!podlet_doc.root.is_object()) {
-            set_runtime_error("invalid podlet archive: top-level object expected");
-            return false;
-        }
-        const serdetk::Object& root = podlet_doc.root.as_object();
-
-        const auto format_it = root.fields.find("format");
-        if (format_it == root.fields.end() || !format_it->second.is_string()) {
-            set_runtime_error("podlet archive missing string field: format");
-            return false;
-        }
-        const std::string format = format_it->second.as_string();
-        if (format != "qamrpp.qpod/1") {
-            set_runtime_error("unsupported podlet format: " + format);
+        minizip::api::result<minizip::detail::byte_vector> manifest_bytes = extractor.extract_bytes("meta/Podpack.qmr");
+        if (!manifest_bytes.ok()) {
+            set_runtime_error("podlet manifest missing from archive: meta/Podpack.qmr");
             return false;
         }
 
-        const auto manifest_it = root.fields.find("manifest");
-        if (manifest_it == root.fields.end() || !manifest_it->second.is_object()) {
-            set_runtime_error("podlet archive missing map field: manifest");
-            return false;
-        }
-        const serdetk::Object& manifest_obj = manifest_it->second.as_object();
         std::map<std::string, std::string> manifest;
-        for (std::map<std::string, serdetk::Value>::const_iterator it = manifest_obj.fields.begin(); it != manifest_obj.fields.end(); ++it) {
-            if (!it->second.is_string()) {
-                set_runtime_error("podlet manifest values must be strings");
-                return false;
-            }
-            manifest[it->first] = it->second.as_string();
-        }
-
-        const auto files_it = root.fields.find("files");
-        if (files_it == root.fields.end() || !files_it->second.is_object()) {
-            set_runtime_error("podlet archive missing map field: files");
-            return false;
-        }
-        const serdetk::Object& files_obj = files_it->second.as_object();
-        std::map<std::string, std::string> files;
-        for (std::map<std::string, serdetk::Value>::const_iterator it = files_obj.fields.begin(); it != files_obj.fields.end(); ++it) {
-            if (it->second.is_string()) {
-                files[it->first] = it->second.as_string();
-                continue;
-            }
-            if (it->second.is_binary()) {
-                const std::vector<std::uint8_t>& bin = it->second.as_binary().bytes;
-                files[it->first] = std::string(reinterpret_cast<const char*>(bin.data()), bin.size());
-                continue;
-            }
-            set_runtime_error("podlet files values must be string or binary");
+        (void)parse_qmr_manifest_text(
+            std::string(reinterpret_cast<const char*>(manifest_bytes.value().data()), manifest_bytes.value().size()),
+            manifest
+        );
+        if (manifest.empty()) {
+            set_runtime_error("podlet manifest is empty or invalid");
             return false;
         }
 
@@ -2469,13 +2561,17 @@ private:
             set_runtime_error("podlet manifest missing required key: entrypoint");
             return false;
         }
-        std::map<std::string, std::string>::const_iterator payload_it = files.find(entry_it->second);
-        if (payload_it == files.end()) {
-            set_runtime_error("podlet entrypoint payload missing from files map");
+
+        minizip::api::result<minizip::detail::byte_vector> payload_bytes = extractor.extract_bytes(entry_it->second);
+        if (!payload_bytes.ok()) {
+            set_runtime_error("podlet entrypoint payload missing from archive");
             return false;
         }
 
-        return materialize_podlet_exports(manifest, payload_it->second);
+        return materialize_podlet_exports(
+            manifest,
+            std::string(reinterpret_cast<const char*>(payload_bytes.value().data()), payload_bytes.value().size())
+        );
     }
 
     bool load_podlet_named(const std::string& name, const std::vector<std::string>& roots) {
@@ -2499,6 +2595,132 @@ private:
             return load_podlet_archive_from_path(candidates[i], name);
         }
         return false;
+    }
+
+    bool load_standard_library_named(const std::string& name) {
+        return load_named_from_roots(name, standard_library_search_roots()) ||
+               load_named_from_roots(name, library_search_roots());
+    }
+
+    bool load_named_from_roots(const std::string& name, const std::vector<std::string>& roots) {
+        for (size_t i = 0; i < roots.size(); ++i) {
+            const std::string candidate = roots[i] + "/" + library_file_name(name);
+            if (load_library(candidate)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static std::string normalize_library_name(
+        const std::string& source,
+        const std::string& explicit_name
+    ) {
+        const std::string value = explicit_name.empty() ? source : explicit_name;
+        std::string name = std::filesystem::path(value).filename().string();
+#ifdef _WIN32
+        const std::string suffix = ".dll";
+#elif __APPLE__
+        const std::string suffix = ".dylib";
+#else
+        const std::string suffix = ".so";
+#endif
+        if (has_suffix(name, suffix)) {
+            name.erase(name.size() - suffix.size());
+        }
+        const std::string prefix = "libqamrpp_";
+        if (name.rfind(prefix, 0) == 0) {
+            name.erase(0, prefix.size());
+        }
+        if (name.empty()) {
+            return source;
+        }
+        return name;
+    }
+
+    static std::string normalize_podlet_name(
+        const std::string& source,
+        const std::string& explicit_name
+    ) {
+        const std::string value = explicit_name.empty() ? source : explicit_name;
+        std::string name = std::filesystem::path(value).filename().string();
+        if (has_suffix(name, ".qpod")) {
+            name.erase(name.size() - 5);
+        }
+        if (name.empty()) {
+            return source;
+        }
+        return name;
+    }
+
+    static std::string podlet_file_name(const std::string& name) {
+        if (has_suffix(name, ".qpod")) {
+            return name;
+        }
+        return name + ".qpod";
+    }
+
+    bool install_file_into_root(
+        const std::string& source,
+        const std::string& target_name,
+        const std::string& root,
+        const char* kind
+    ) {
+        if (source.empty()) {
+            set_runtime_error(std::string("empty ") + kind + " source");
+            return false;
+        }
+        const std::filesystem::path source_path(source);
+        if (!std::filesystem::exists(source_path) || !std::filesystem::is_regular_file(source_path)) {
+            set_runtime_error(std::string(kind) + " source does not exist: " + source);
+            return false;
+        }
+        if (target_name.empty()) {
+            set_runtime_error(std::string("empty ") + kind + " target name");
+            return false;
+        }
+
+        const std::filesystem::path dest_root(root);
+        std::error_code ec;
+        std::filesystem::create_directories(dest_root, ec);
+        if (ec) {
+            set_runtime_error(std::string("failed to create ") + kind + " root: " + dest_root.string());
+            return false;
+        }
+
+        const std::filesystem::path target = dest_root / target_name;
+        if (std::filesystem::equivalent(source_path, target, ec) && !ec) {
+            return true;
+        }
+        std::filesystem::copy_file(source_path, target, std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) {
+            set_runtime_error(std::string("failed to install ") + kind + ": " + target.string());
+            return false;
+        }
+        return true;
+    }
+
+    bool remove_file_from_root(
+        const std::string& target_name,
+        const std::string& root,
+        const char* kind
+    ) {
+        if (target_name.empty()) {
+            set_runtime_error(std::string("empty ") + kind + " target name");
+            return false;
+        }
+        const std::filesystem::path target = std::filesystem::path(root) / target_name;
+        std::error_code ec;
+        const bool removed = std::filesystem::remove(target, ec);
+        if (ec) {
+            set_runtime_error(std::string("failed to remove ") + kind + ": " + target.string());
+            return false;
+        }
+        if (!removed) {
+            set_runtime_error(std::string(kind) + " not found: " + target.string());
+            return false;
+        }
+        return true;
     }
 
     static bool ensure_dir(const std::string& path) {

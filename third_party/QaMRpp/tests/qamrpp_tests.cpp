@@ -639,6 +639,45 @@ TEST_CASE("podlet loading honors QAMRPP_PATH search path") {
     REQUIRE(module);
 }
 
+TEST_CASE("QAMRPP_HOME helpers and install/remove paths resolve consistently") {
+    TempDir work;
+    ScopedEnv home_guard("HOME");
+    ScopedEnv qamrpp_guard("QAMRPP_HOME");
+    home_guard.set((work.path / "fake_home").string());
+    qamrpp_guard.set((work.path / "custom_qamrpp").string());
+
+    REQUIRE(qamrpp::Context::home_root() == (work.path / "custom_qamrpp").string());
+    REQUIRE(qamrpp::Context::library_root() == (work.path / "custom_qamrpp" / "lib" / "stdlua").string());
+    REQUIRE(qamrpp::Context::podlet_root() == (work.path / "custom_qamrpp" / "podlet").string());
+}
+
+TEST_CASE("library and podlet install/remove helpers round-trip") {
+    TempDir work;
+    ScopedEnv home_guard("HOME");
+    ScopedEnv qamrpp_guard("QAMRPP_HOME");
+    home_guard.set((work.path / "fake_home").string());
+    qamrpp_guard.set((work.path / "custom_qamrpp").string());
+
+    qamrpp::Context ctx;
+    const std::filesystem::path library_source = work.path / "libqamrpp_sample.so";
+    const std::filesystem::path podlet_source = work.path / "sample.qpod";
+    REQUIRE(write_text_file(library_source, "native-library"));
+    REQUIRE(write_text_file(podlet_source, "podlet-archive"));
+
+    REQUIRE(ctx.install_library(library_source.string()));
+    REQUIRE(std::filesystem::exists(std::filesystem::path(qamrpp::Context::library_root()) / "libqamrpp_sample.so"));
+    REQUIRE(ctx.remove_library("sample"));
+    REQUIRE(!std::filesystem::exists(std::filesystem::path(qamrpp::Context::library_root()) / "libqamrpp_sample.so"));
+
+    REQUIRE(ctx.install_podlet(podlet_source.string()));
+    REQUIRE(std::filesystem::exists(std::filesystem::path(qamrpp::Context::podlet_root()) / "sample.qpod"));
+    REQUIRE(ctx.remove_podlet("sample"));
+    REQUIRE(!std::filesystem::exists(std::filesystem::path(qamrpp::Context::podlet_root()) / "sample.qpod"));
+
+    REQUIRE(!ctx.remove_library("core"));
+    REQUIRE(ctx.last_error_message.find("standard library cannot be removed") != std::string::npos);
+}
+
 TEST_CASE("podpack --init scaffold, build, and install") {
     const std::string podpack = locate_binary("podpack");
     if (podpack.empty()) {
@@ -673,6 +712,32 @@ TEST_CASE("podpack --init scaffold, build, and install") {
     const auto& root = doc.root.as_object();
     REQUIRE(root.fields.at("format").is_string());
     REQUIRE(root.fields.at("format").as_string() == "qamrpp.qpod/1");
+}
+
+TEST_CASE("qamrpp-cli installs and removes native libraries") {
+    const std::string cli = locate_binary("qamrpp-cli");
+    if (cli.empty()) {
+        SUCCEED("qamrpp-cli binary not available in this build configuration");
+        return;
+    }
+
+    TempDir work;
+    const std::filesystem::path source = work.path / "libqamrpp_sample.so";
+    const std::filesystem::path install_root = work.path / "library_root";
+    REQUIRE(write_text_file(source, "native-library"));
+
+    const std::string install_cmd =
+        cli + " --install-library " + source.string() +
+        " --name sample_alias" +
+        " --root " + install_root.string();
+    REQUIRE(run_command(install_cmd) == 0);
+    REQUIRE(std::filesystem::exists(install_root / "libqamrpp_sample_alias.so"));
+
+    const std::string remove_cmd =
+        cli + " --remove-library sample_alias" +
+        " --root " + install_root.string();
+    REQUIRE(run_command(remove_cmd) == 0);
+    REQUIRE(!std::filesystem::exists(install_root / "libqamrpp_sample_alias.so"));
 }
 
 TEST_CASE("runner catches malformed script via qamrpp-cli") {
@@ -711,6 +776,7 @@ TEST_CASE("qamrpp-cli auto-loads stdlib and stdlib++ from HOME") {
 
     REQUIRE(std::filesystem::create_directories(home_qamrpp / "stdc"));
     REQUIRE(std::filesystem::create_directories(home_qamrpp / "stdc++"));
+    REQUIRE(std::filesystem::create_directories(home_qamrpp / "lib" / "stdlua"));
 
     const std::filesystem::path source_file_dir = std::filesystem::path(__FILE__).parent_path().parent_path();
     std::filesystem::path source_root = source_file_dir;
@@ -734,15 +800,19 @@ TEST_CASE("qamrpp-cli auto-loads stdlib and stdlib++ from HOME") {
     );
     REQUIRE(std::filesystem::exists(repo_qamrpp / "libqamrpp_core.so"));
     REQUIRE(std::filesystem::exists(repo_qamrpp / "libqamrpp_math.so"));
-    REQUIRE(std::filesystem::exists(source_root / "stdlib++" / "string.hpp"));
-    REQUIRE(std::filesystem::exists(source_root / "include" / "QaMRpp-Library.hpp"));
+    REQUIRE(std::filesystem::exists(source_root / "qlib" / "C++" / "QaMRpp-Library.hpp"));
+    REQUIRE(std::filesystem::exists(source_root / "qlib" / "C" / "QaMRpp-Library.h"));
 
     REQUIRE(write_text_file(home_qamrpp / "stdc" / "test.c", "return {\n}\n"));
     for (const auto& entry : std::filesystem::directory_iterator(repo_qamrpp)) {
         if (!entry.is_regular_file()) continue;
         if (entry.path().extension() == ".so" &&
             entry.path().filename().string().find("libqamrpp_") == 0) {
-            std::filesystem::copy_file(entry.path(), home_qamrpp / entry.path().filename(), std::filesystem::copy_options::overwrite_existing);
+            std::filesystem::copy_file(
+                entry.path(),
+                home_qamrpp / "lib" / "stdlua" / entry.path().filename(),
+                std::filesystem::copy_options::overwrite_existing
+            );
         }
     }
     REQUIRE(write_text_file(home_qamrpp / "stdc++" / "QaMRpp-Library.hpp", "return {}\n"));
