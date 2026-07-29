@@ -1,15 +1,43 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUT_DIR="${ROOT_DIR}/build"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+dist="${root}/dist"
+pdf="${1:-${dist}/SExprTk-Manual.pdf}"
+case "${pdf}" in
+  *.pdf) html="${pdf%.pdf}.html" ;;
+  *) html="${pdf}.html"; pdf="${pdf}.pdf" ;;
+esac
+mkdir -p "$(dirname "${pdf}")" "$(dirname "${html}")"
+tmp="$(mktemp)"
+trap 'rm -f "${tmp}"' EXIT
 
-mkdir -p "${OUT_DIR}"
-python3 "${ROOT_DIR}/generate_manual.py"
+for chapter in "${root}"/[0-9][0-9]-*.md; do
+  cat "${chapter}" >> "${tmp}"
+  printf '\n\n\\newpage\n\n' >> "${tmp}"
+done
 
-cat "${ROOT_DIR}"/chapter*.md > "${OUT_DIR}/SExprTk-Manual.md"
+pandoc "${tmp}" --from=gfm --standalone --toc \
+  --metadata title="SExprTk Manual" \
+  --metadata author="SExprTk" \
+  -o "${html}"
 
-pandoc "${OUT_DIR}/SExprTk-Manual.md" --metadata title="SExprTk Manual" -s -o "${OUT_DIR}/SExprTk-Manual.html"
-pandoc "${OUT_DIR}/SExprTk-Manual.md" --metadata title="SExprTk Manual" -s -o "${OUT_DIR}/SExprTk-Manual.tex"
-pandoc "${OUT_DIR}/SExprTk-Manual.md" --metadata title="SExprTk Manual" -t docbook -s -o "${OUT_DIR}/SExprTk-Manual.xml"
-python3 "${ROOT_DIR}/markdown_to_pdf.py" "${OUT_DIR}/SExprTk-Manual.md" "${OUT_DIR}/SExprTk-Manual.pdf"
+if command -v xelatex >/dev/null 2>&1 && command -v kpsewhich >/dev/null 2>&1 &&
+   [[ -n "$(kpsewhich xelatex.fmt 2>/dev/null || true)" ]]; then
+  pandoc "${tmp}" --from=gfm --standalone --toc \
+    --metadata title="SExprTk Manual" \
+    --metadata author="SExprTk" \
+    --pdf-engine=xelatex -o "${pdf}"
+elif command -v pdflatex >/dev/null 2>&1 && command -v kpsewhich >/dev/null 2>&1 &&
+     [[ -n "$(kpsewhich pdflatex.fmt 2>/dev/null || true)" ]]; then
+  pandoc "${tmp}" --from=gfm --standalone --toc \
+    --metadata title="SExprTk Manual" \
+    --metadata author="SExprTk" \
+    --pdf-engine=pdflatex -o "${pdf}"
+elif [[ -f "${root}/markdown_to_pdf.py" ]]; then
+  python3 "${root}/markdown_to_pdf.py" "${tmp}" "${pdf}"
+else
+  echo "error: no functional PDF renderer found" >&2
+  exit 1
+fi
+printf 'wrote %s\nwrote %s\n' "${html}" "${pdf}"
