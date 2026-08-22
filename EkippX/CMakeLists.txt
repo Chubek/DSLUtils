@@ -17,11 +17,10 @@ target_link_libraries(EkippX
         Parzek
 )
 
-if(TARGET Klyspec)
-    target_link_libraries(EkippX PUBLIC Klyspec)
-elseif(EXISTS "${CMAKE_SOURCE_DIR}/third_party/Klyspec/Klyspec.hpp")
-    target_include_directories(EkippX PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/third_party/Klyspec>)
+if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/Klyspec/include/Klyspec.hpp")
+    target_include_directories(EkippX PRIVATE
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/third_party/Klyspec/include>
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/third_party/Klyspec/third_party>)
 endif()
 
 if(TARGET PikoRL)

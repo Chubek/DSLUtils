@@ -12,6 +12,11 @@ target_include_directories(DSLtk
 target_compile_features(DSLtk INTERFACE cxx_std_20)
 
 install(
+   FILES scripts/DSLtk-ParserGenerator.rb
+   DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+install(
     FILES DSLtk.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )

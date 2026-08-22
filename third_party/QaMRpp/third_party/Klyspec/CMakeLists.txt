@@ -32,10 +32,12 @@ target_compile_features(klyspec INTERFACE cxx_std_20)
 # --- yaml-cpp (vendored) ----------------------------------------------------
 # CLI manifests are YAML-only and parsed via yaml-cpp, which is vendored under
 # third_party/yaml-cpp. Build it statically with extras disabled.
-set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
-set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
-add_subdirectory(third_party/yaml-cpp)
+if(NOT TARGET yaml-cpp)
+  set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+  set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
+  add_subdirectory(third_party/yaml-cpp)
+endif()
 target_link_libraries(klyspec INTERFACE yaml-cpp)
 
 # --- Bootstrapped CLI -------------------------------------------------------
