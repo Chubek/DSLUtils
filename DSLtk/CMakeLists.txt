@@ -1,5 +1,7 @@
 project(DSLtk VERSION 1.0 LANGUAGES CXX)
 
+option(DSLtk_BUILD_GENERATOR "Build the parser generator" ON)
+
 add_library(DSLtk INTERFACE)
 
 target_include_directories(DSLtk
@@ -10,11 +12,6 @@ target_include_directories(DSLtk
 )
 
 target_compile_features(DSLtk INTERFACE cxx_std_20)
-
-install(
-   FILES scripts/DSLtk-ParserGenerator.rb
-   DESTINATION ${CMAKE_INSTALL_LIBDIR}
-)
 
 install(
     FILES DSLtk.hpp
@@ -32,6 +29,10 @@ install(
     NAMESPACE DSLtk::
     DESTINATION lib/cmake/DSLtk
 )
+
+if (DSLtk_BUILD_GENERATOR)
+    # implement here
+endif()
 
 include(CMakePackageConfigHelpers)
 
