@@ -77,6 +77,14 @@ configure_package_config_file(
     INSTALL_DESTINATION lib/cmake/DSLtk
 )
 
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/DSLtk.pc.in
+    ${CMAKE_CURRENT_BINARY_DIR}/DSLtk.pc
+    @ONLY)
+
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/DSLtk.pc
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+
 install(
     FILES
         "${CMAKE_CURRENT_BINARY_DIR}/DSLtkConfig.cmake"
